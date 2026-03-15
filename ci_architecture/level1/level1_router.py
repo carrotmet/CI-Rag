@@ -190,8 +190,12 @@ class Level1Router:
         """Extract top documents from retrieval results."""
         docs = []
         
+        if not retrieval:
+            return docs
+        
         # From vector results
-        vector_results = retrieval.get('vector', {}).get('results', [])
+        vector_data = retrieval.get('vector') or {}
+        vector_results = vector_data.get('results', [])
         for i, r in enumerate(vector_results[:3]):
             docs.append({
                 'source': 'vector',
@@ -201,7 +205,8 @@ class Level1Router:
             })
         
         # From keyword results
-        keyword_results = retrieval.get('keyword', {}).get('results', [])
+        keyword_data = retrieval.get('keyword') or {}
+        keyword_results = keyword_data.get('results', [])
         for i, r in enumerate(keyword_results[:3]):
             docs.append({
                 'source': 'keyword',
@@ -209,6 +214,18 @@ class Level1Router:
                 'content': r.get('content', ''),
                 'score': r.get('score', 0.0),
                 'matched_terms': r.get('matched_terms', [])
+            })
+        
+        # From structured results
+        structured_data = retrieval.get('structured') or {}
+        structured_results = structured_data.get('results', [])
+        for i, r in enumerate(structured_results[:3]):
+            docs.append({
+                'source': 'structured',
+                'rank': i + 1,
+                'content': r.get('content', r.get('disease', '')),
+                'score': r.get('match_score', 0.0),
+                'disease': r.get('disease', '')
             })
         
         return docs

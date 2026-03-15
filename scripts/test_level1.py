@@ -22,14 +22,28 @@ def format_result(result: dict, elapsed_ms: float) -> str:
     """Format retrieval result for display."""
     lines = []
     lines.append(f"  Time: {elapsed_ms:.2f}ms")
-    lines.append(f"  I (Information Sufficiency): {result['I_mean']:.3f}")
-    lines.append(f"  σ_I (Confidence): {result['sigma_I']:.3f}")
+    
+    # Use correct key names from fuse_with_level0
+    I_value = result.get('I', result.get('I_mean', 0.0))
+    sigma_i = result.get('sigma_i', result.get('sigma_I', 0.0))
+    
+    lines.append(f"  I (Information Sufficiency): {I_value:.3f}")
+    lines.append(f"    - From Level 0: {result.get('I_level0', 0.0):.3f}")
+    lines.append(f"    - From Retrieval: {result.get('I_retrieval', 0.0):.3f}")
+    lines.append(f"  sigma_i (Confidence): {sigma_i:.3f}")
+    lines.append(f"  sigma_joint: {result.get('sigma_joint', 0.0):.3f}")
     
     if result.get('conflict_detected'):
-        lines.append(f"  ⚠️  Conflict detected between sources!")
+        lines.append(f"  [!] Conflict detected between sources!")
+    
+    # Show which sources were used
+    lines.append(f"\n  Sources used: {list(result.get('source_weights', {}).keys())}")
+    
+    # Get retrieval evidence
+    evidence = result.get('retrieval_evidence', {})
     
     # Vector results
-    v_result = result.get('vector')
+    v_result = evidence.get('vector')
     if v_result:
         lines.append(f"\n  [Vector Retrieval]")
         lines.append(f"    sim_max: {v_result['sim_max']:.3f}")
@@ -37,8 +51,18 @@ def format_result(result: dict, elapsed_ms: float) -> str:
         lines.append(f"    entropy: {v_result['entropy']:.3f}")
         lines.append(f"    Top match: {v_result['results'][0]['content'][:50]}..." if v_result['results'] else "    No results")
     
+    # Structured results
+    s_result = evidence.get('structured')
+    if s_result:
+        lines.append(f"\n  [Structured Retrieval]")
+        lines.append(f"    schema_match_rate: {s_result['schema_match_rate']:.2f}")
+        lines.append(f"    row_count: {s_result['row_count']}")
+        lines.append(f"    success: {s_result['success']}")
+        if s_result['results']:
+            lines.append(f"    Top match: {s_result['results'][0].get('disease', 'N/A')}")
+    
     # Keyword results
-    k_result = result.get('keyword')
+    k_result = evidence.get('keyword')
     if k_result:
         lines.append(f"\n  [Keyword Retrieval]")
         lines.append(f"    score_max: {k_result['score_max']:.2f}")
@@ -57,23 +81,36 @@ def main():
     print("\nThis test demonstrates why both vector and keyword retrieval are needed:")
     print("- Vector: Understands semantic descriptions of symptoms")
     print("- Keyword: Precisely matches specific medical terminology")
+    print("- Structured: Schema-based disease/symptom lookup")
     print()
     
-    # Check if indexes exist
+    # Load documents first
+    from data.medical_symptoms import get_medical_dataset
+    documents = get_medical_dataset()
+    print(f"Loaded {len(documents)} medical documents\n")
+    
+    # Check if vector index exists
     vector_index_path = "indexes/medical_vector.faiss"
-    if not os.path.exists(vector_index_path):
-        print(f"Error: Index not found: {vector_index_path}")
-        print("Please run: python scripts/build_level1_index.py")
-        return 1
+    use_vector = os.path.exists(vector_index_path)
+    
+    if not use_vector:
+        print(f"Note: Vector index not found, building from documents...")
+        print("(Vector retrieval requires sentence-transformers and faiss)")
     
     # Initialize routers
     print("Loading indexes...")
     try:
-        level1 = Level1Router(vector_index_path=vector_index_path)
+        if use_vector:
+            level1 = Level1Router(vector_index_path=vector_index_path, documents=documents)
+        else:
+            # Use documents directly (keyword + structured only)
+            level1 = Level1Router(documents=documents)
         level0 = Level0Router()  # For cold start mode
-        print("✓ Indexes loaded\n")
+        print("[OK] Indexes loaded\n")
     except Exception as e:
         print(f"Error loading indexes: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
     
     # Run test queries

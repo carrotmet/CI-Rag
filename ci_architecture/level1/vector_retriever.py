@@ -13,14 +13,16 @@ import numpy as np
 try:
     from sentence_transformers import SentenceTransformer
     SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception) as e:
     SENTENCE_TRANSFORMERS_AVAILABLE = False
+    print(f"Warning: sentence-transformers not available: {e}")
 
 try:
     import faiss
     FAISS_AVAILABLE = True
-except ImportError:
+except (ImportError, OSError, Exception) as e:
     FAISS_AVAILABLE = False
+    print(f"Warning: faiss not available: {e}")
 
 
 @dataclass
