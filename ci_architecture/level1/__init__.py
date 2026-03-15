@@ -8,6 +8,7 @@ Implements three parallel retrieval modalities:
 
 from .vector_retriever import VectorRetriever, VectorRetrievalResult
 from .keyword_retriever import KeywordRetriever, InvertedIndex
+from .structured_retriever import StructuredRetriever, IntentRecognizer, StructuredResult
 from .fusion import ConfidenceFusion, RetrievalResult
 from .level1_router import Level1Router
 
@@ -16,6 +17,9 @@ __all__ = [
     "VectorRetrievalResult", 
     "KeywordRetriever",
     "InvertedIndex",
+    "StructuredRetriever",
+    "IntentRecognizer",
+    "StructuredResult",
     "ConfidenceFusion",
     "RetrievalResult",
     "Level1Router",

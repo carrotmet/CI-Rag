@@ -10,6 +10,7 @@ from dataclasses import asdict
 
 from .vector_retriever import VectorRetriever
 from .keyword_retriever import KeywordRetriever
+from .structured_retriever import StructuredRetriever
 from .fusion import ConfidenceFusion
 
 
@@ -20,7 +21,8 @@ class Level1Router:
     Executes parallel retrieval:
     1. Vector semantic search (sentence-transformers + FAISS)
     2. Keyword sparse retrieval (jieba + BM25)
-    3. Confidence fusion with conflict detection
+    3. Structured data retrieval (intent + schema matching)
+    4. Confidence fusion with conflict detection
     
     Target latency: ~50ms total
     """
@@ -39,6 +41,7 @@ class Level1Router:
         """
         self.vector_retriever: Optional[VectorRetriever] = None
         self.keyword_retriever: Optional[KeywordRetriever] = None
+        self.structured_retriever: Optional[StructuredRetriever] = None
         self.fusion = ConfidenceFusion()
         
         # Initialize retrievers
@@ -68,10 +71,22 @@ class Level1Router:
                 print(f"Built keyword index with {len(documents)} documents")
             except Exception as e:
                 print(f"Warning: Failed to build keyword index: {e}")
+        
+        # Structured retriever
+        if documents:
+            try:
+                self.structured_retriever = StructuredRetriever(documents)
+                print(f"Built structured index with {len(documents)} documents")
+            except Exception as e:
+                print(f"Warning: Failed to build structured index: {e}")
     
     def is_ready(self) -> bool:
         """Check if router is ready for retrieval."""
-        return self.vector_retriever is not None or self.keyword_retriever is not None
+        return any([
+            self.vector_retriever is not None,
+            self.keyword_retriever is not None,
+            self.structured_retriever is not None
+        ])
     
     def retrieve(self, query: str, k: int = 10) -> Dict:
         """
@@ -113,8 +128,23 @@ class Level1Router:
             except Exception as e:
                 print(f"Keyword retrieval error: {e}")
         
+        # Structured retrieval
+        structured_result = None
+        if self.structured_retriever:
+            try:
+                s_result = self.structured_retriever.search(query)
+                structured_result = {
+                    'schema_match_rate': s_result.schema_match_rate,
+                    'row_count': s_result.row_count,
+                    'null_ratio': s_result.null_ratio,
+                    'success': s_result.success,
+                    'results': s_result.results
+                }
+            except Exception as e:
+                print(f"Structured retrieval error: {e}")
+        
         # Fusion
-        fusion_result = self.fusion.fuse(vector_result, keyword_result)
+        fusion_result = self.fusion.fuse(vector_result, keyword_result, structured_result)
         
         return {
             'I_mean': fusion_result.I_mean,

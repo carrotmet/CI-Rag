@@ -14,6 +14,7 @@ class RetrievalResult:
     I_mean: float
     sigma_I: float
     vector_conf: float
+    structured_conf: float
     keyword_conf: float
     conflict_detected: bool
     source_weights: Dict[str, float]
@@ -24,8 +25,9 @@ class ConfidenceFusion:
     Fuse multi-source retrieval signals into unified I estimate.
     
     Default weights:
-    - Vector: 0.6 (semantic relevance)
-    - Keyword: 0.4 (exact match reliability)
+    - Vector: 0.4 (semantic relevance)
+    - Structured: 0.4 (schema match reliability)
+    - Keyword: 0.2 (exact match support)
     
     Conflict detection triggers when sources disagree significantly.
     """
@@ -35,11 +37,12 @@ class ConfidenceFusion:
         Initialize fusion with source weights.
         
         Args:
-            weights: Dict with 'vector' and 'keyword' weights
+            weights: Dict with 'vector', 'structured', 'keyword' weights
         """
         self.weights = weights or {
-            'vector': 0.6,
-            'keyword': 0.4
+            'vector': 0.4,
+            'structured': 0.4,
+            'keyword': 0.2
         }
         
         # Conflict detection thresholds
@@ -99,15 +102,43 @@ class ConfidenceFusion:
         
         return float(np.clip(confidence, 0.0, 1.0))
     
+    def calibrate_structured(self, schema_match_rate: float, row_count: int, null_ratio: float) -> float:
+        """
+        Calibrate structured retrieval confidence.
+        
+        Args:
+            schema_match_rate: Fraction of query elements mappable to schema
+            row_count: Number of results returned
+            null_ratio: Fraction of null values in results
+            
+        Returns:
+            Calibrated confidence [0, 1]
+        """
+        # Base confidence from schema match
+        base_conf = schema_match_rate
+        
+        # Specificity factor - fewer results = more specific = higher confidence
+        specificity = 1.0 / (1.0 + np.log1p(row_count))
+        
+        # Completeness factor - less null = more complete = higher confidence
+        completeness = 1.0 - null_ratio
+        
+        # Combine
+        confidence = base_conf * specificity * completeness
+        
+        return float(np.clip(confidence, 0.0, 1.0))
+    
     def fuse(self, 
              vector_result: Optional[Dict] = None,
-             keyword_result: Optional[Dict] = None) -> RetrievalResult:
+             keyword_result: Optional[Dict] = None,
+             structured_result: Optional[Dict] = None) -> RetrievalResult:
         """
         Fuse sources into unified I estimate.
         
         Args:
             vector_result: Vector retrieval result with sim_max, gap, entropy
             keyword_result: Keyword retrieval result with score_max, coverage
+            structured_result: Structured retrieval result with schema_match_rate
             
         Returns:
             RetrievalResult with fused I_mean and sigma_I
@@ -122,6 +153,14 @@ class ConfidenceFusion:
                 vector_result.get('entropy', 1.0)
             )
             available_sources['vector'] = conf_vector
+        
+        if structured_result and structured_result.get('success', False):
+            conf_structured = self.calibrate_structured(
+                structured_result.get('schema_match_rate', 0.0),
+                structured_result.get('row_count', 0),
+                structured_result.get('null_ratio', 0.5)
+            )
+            available_sources['structured'] = conf_structured
         
         if keyword_result:
             conf_keyword = self.calibrate_keyword(
@@ -177,6 +216,7 @@ class ConfidenceFusion:
             I_mean=float(np.clip(I_mean, 0.0, 1.0)),
             sigma_I=float(np.clip(sigma_I, 0.0, 1.0)),
             vector_conf=available_sources.get('vector', 0.0),
+            structured_conf=available_sources.get('structured', 0.0),
             keyword_conf=available_sources.get('keyword', 0.0),
             conflict_detected=conflict_detected,
             source_weights=normalized_weights
@@ -185,7 +225,8 @@ class ConfidenceFusion:
     def fuse_with_level0(self,
                         level0_result: Dict,
                         vector_result: Optional[Dict] = None,
-                        keyword_result: Optional[Dict] = None) -> Dict:
+                        keyword_result: Optional[Dict] = None,
+                        structured_result: Optional[Dict] = None) -> Dict:
         """
         Fuse Level 1 retrieval results with Level 0 context.
         
@@ -203,7 +244,7 @@ class ConfidenceFusion:
         sigma_c = level0_result.get('sigma_c', 0.5)
         
         # Fuse retrieval sources
-        fusion = self.fuse(vector_result, keyword_result)
+        fusion = self.fuse(vector_result, keyword_result, structured_result)
         
         # Combine Level 0 I with retrieval-based I
         # Weight by confidence - if retrieval is confident, use it more
@@ -227,6 +268,7 @@ class ConfidenceFusion:
             'escalate': sigma_joint < 0.7 or fusion.conflict_detected,
             'conflict_detected': fusion.conflict_detected,
             'vector_confidence': fusion.vector_conf,
+            'structured_confidence': fusion.structured_conf,
             'keyword_confidence': fusion.keyword_conf,
             'source_weights': fusion.source_weights,
             'level': 1
