@@ -1,0 +1,20 @@
+主要参考：https://docs.firecrawl.dev/introduction
+示例代码：
+# pip install firecrawl-py
+from firecrawl import Firecrawl
+
+app = Firecrawl(api_key="fc-da5cc27f2e3743a991072cae744230a0")
+
+# Scrape a website:
+app.scrape('firecrawl.dev')
+
+权限相关：
+npx -y firecrawl-cli@latest init --all --browser
+
+# Your AI agent (Claude Code, Codex, OpenCode, etc) can now:
+# Scrape a page to clean markdown
+# Search and scrape top results
+# Crawl an entire website
+# Map an entire domain
+
+API KEY:fc-da5cc27f2e3743a991072cae744230a0
