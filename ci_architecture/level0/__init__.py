@@ -3,7 +3,7 @@
 from .features import FeatureExtractor, extract_features
 from .heuristic_router import HeuristicRouter
 from .classifier import XGBoostClassifier
-from .router import Level0Router, RouterStatus
+from .router import Level0Router, RouterStatus, route_query
 
 __all__ = [
     "FeatureExtractor",
@@ -12,4 +12,5 @@ __all__ = [
     "XGBoostClassifier",
     "Level0Router",
     "RouterStatus",
+    "route_query",
 ]

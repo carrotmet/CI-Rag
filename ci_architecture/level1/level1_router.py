@@ -11,7 +11,7 @@ from dataclasses import asdict
 from .vector_retriever import VectorRetriever
 from .keyword_retriever import KeywordRetriever
 from .structured_retriever import StructuredRetriever
-from .fusion import ConfidenceFusion
+from .fusion_v3 import ConfidenceFusion
 
 
 class Level1Router:
