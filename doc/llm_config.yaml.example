@@ -1,0 +1,152 @@
+# AI Coach LLM 配置文件
+# 放置位置: /root/.openclaw/workspace/AICOACH/shenmi4/backend/config/llm_config.yaml
+#
+# 使用说明:
+# 1. 复制此文件: cp llm_config.yaml.example llm_config.yaml
+# 2. 填写API密钥 (或使用环境变量 LAZYLLM_KIMI_API_KEY)
+# 3. 重启服务
+
+# ============================================
+# LiteLLM 模型路由配置
+# ============================================
+
+model_list:
+  # Kimi 轻量级模型（首选、回退目标）- 适合日常对话、快速响应
+  - model_name: kimi-k2-turbo-preview
+    litellm_params:
+      model: openai/kimi-k2-turbo-preview
+      api_base: https://api.moonshot.cn/v1
+      api_key: sk-qXr5HdkFclx56wUVP89UNFwPRR4MpBvdF5sFsM5EzzVVnkK5
+      temperature: 0.7
+      max_tokens: 4000
+      timeout: 60
+  
+  # Moonshot V1 8K（更轻量的备选）- 失败时回退
+  - model_name: moonshot-v1-8k
+    litellm_params:
+      model: openai/moonshot-v1-8k
+      api_base: https://api.moonshot.cn/v1
+      api_key: sk-qXr5HdkFclx56wUVP89UNFwPRR4MpBvdF5sFsM5EzzVVnkK5
+      temperature: 0.7
+      max_tokens: 4000
+      timeout: 60
+      
+  # Kimi 2.5 强模型（复杂任务）- 深度分析、长文本
+  - model_name: kimi-k2.5
+    litellm_params:
+      model: openai/kimi-k2.5
+      api_base: https://api.moonshot.cn/v1
+      api_key: sk-qXr5HdkFclx56wUVP89UNFwPRR4MpBvdF5sFsM5EzzVVnkK5
+      temperature: 1.0
+      max_tokens: 4000
+      timeout: 120
+
+# ============================================
+# 模型别名（场景路由）
+# ============================================
+
+model_alias:
+  # AI教练对话场景
+  coach-chat: kimi-k2-turbo-preview
+  coach-chat-fallback: moonshot-v1-8k
+  
+  # 结构化输出/意图识别（需要稳定格式）
+  structured-output: kimi-k2-turbo-preview
+  structured-fallback: moonshot-v1-8k
+  
+  # 深度分析/报告生成
+  deep-analysis: kimi-k2.5
+  deep-analysis-fallback: kimi-k2-turbo-preview
+  
+  # 会话摘要
+  session-summary: kimi-k2-turbo-preview
+  
+  # 默认模型
+  default: kimi-k2-turbo-preview
+  default-fallback: moonshot-v1-8k
+
+# ============================================
+# 路由策略
+# ============================================
+
+router_settings:
+  # 超时时间(秒)
+  timeout: 60
+  
+  # 最大重试次数
+  num_retries: 2
+  
+  # 重试间隔(秒)
+  retry_after: 1
+  
+  # 回退策略：从复杂/强模型回退到简单/轻量模型
+  fallback_strategy:
+    # kimi-k2.5 失败时回退到轻量的 turbo-preview，再到 moonshot
+    - model: kimi-k2.5
+      fallback: [kimi-k2-turbo-preview, moonshot-v1-8k]
+    # turbo-preview 失败时回退到更轻的 moonshot-v1-8k
+    - model: kimi-k2-turbo-preview
+      fallback: [moonshot-v1-8k]
+
+# ============================================
+# 场景化模型选择
+# ============================================
+
+routing_strategy:
+  # 短对话 (< 2k tokens)
+  short_context:
+    model: kimi-k2-turbo-preview
+    max_tokens: 2000
+    temperature: 0.7
+    
+  # 长对话/报告生成 (> 2k tokens)
+  long_context:
+    model: kimi-k2.5
+    max_tokens: 4000
+    temperature: 1.0
+    
+  # 结构化输出 (JSON模式)
+  structured_output:
+    model: kimi-k2-turbo-preview
+    temperature: 0.3  # 更低温度确保格式稳定
+    max_tokens: 1500
+    
+  # 情感分析
+  emotion_analysis:
+    model: kimi-k2-turbo-preview
+    temperature: 0.2
+    max_tokens: 500
+    
+  # 会话摘要
+  session_summary:
+    model: kimi-k2-turbo-preview
+    temperature: 0.4
+    max_tokens: 800
+
+# ============================================
+# 成本控制和限速
+# ============================================
+
+cost_control:
+  # 每日最大请求数 (0 = 无限制)
+  max_requests_per_day: 0
+  
+  # 每分钟最大请求数
+  max_requests_per_minute: 60
+  
+  # 预算警告阈值 (美元)
+  budget_alert_threshold: 50.0
+
+# ============================================
+# 日志和监控
+# ============================================
+
+logging:
+  # 日志级别: DEBUG, INFO, WARNING, ERROR
+  level: INFO
+  
+  # 是否记录完整请求/响应
+  log_raw_requests: false
+  
+  # 回调地址 (用于监控)
+  callback_url: null

@@ -1,0 +1,168 @@
+# CI-RAG-ROUTER Level 2 LLM 配置文件
+# 路径: config/llm_config.yaml
+#
+# 使用说明:
+# 1. 复制此文件并根据需要修改
+# 2. 设置环境变量 CI_LLM_API_KEY 或直接在下方填写
+# 3. 确保 litellm 已安装: pip install litellm>=1.0.0
+
+# ============================================
+# LiteLLM 模型路由配置
+# ============================================
+
+model_list:
+  # Kimi 轻量级模型（默认仲裁模型）- 适合快速响应、结构化输出
+  - model_name: kimi-k2-turbo-preview
+    litellm_params:
+      model: openai/kimi-k2-turbo-preview
+      api_base: https://api.moonshot.cn/v1
+      api_key: ${CI_LLM_API_KEY}
+      temperature: 0.3
+      max_tokens: 2000
+      timeout: 30
+      response_format: { "type": "json_object" }
+  
+  # Kimi 2.5 强模型（复杂任务）- 深度分析、模糊查询
+  - model_name: kimi-k2.5
+    litellm_params:
+      model: openai/kimi-k2.5
+      api_base: https://api.moonshot.cn/v1
+      api_key: ${CI_LLM_API_KEY}
+      temperature: 0.5
+      max_tokens: 4000
+      timeout: 60
+      response_format: { "type": "json_object" }
+      
+  # 备用轻量模型（失败时回退）
+  - model_name: moonshot-v1-8k
+    litellm_params:
+      model: openai/moonshot-v1-8k
+      api_base: https://api.moonshot.cn/v1
+      api_key: ${CI_LLM_API_KEY}
+      temperature: 0.3
+      max_tokens: 2000
+      timeout: 30
+      response_format: { "type": "json_object" }
+
+# ============================================
+# 模型别名（场景路由）
+# ============================================
+
+model_alias:
+  # CI-RAG-ROUTER Level 2 仲裁
+  level2-arbitration: kimi-k2-turbo-preview
+  level2-arbitration-fallback: moonshot-v1-8k
+  
+  # 复杂查询分析（高复杂度 C=1）
+  complex-analysis: kimi-k2.5
+  complex-analysis-fallback: kimi-k2-turbo-preview
+  
+  # 结构化输出（CI评估）
+  ci-evaluation: kimi-k2-turbo-preview
+  ci-evaluation-fallback: moonshot-v1-8k
+  
+  # 双探针验证
+  dual-probe: kimi-k2-turbo-preview
+  
+  # 默认模型
+  default: kimi-k2-turbo-preview
+  default-fallback: moonshot-v1-8k
+
+# ============================================
+# 路由策略
+# ============================================
+
+router_settings:
+  # 超时时间(秒)
+  timeout: 30
+  
+  # 最大重试次数
+  num_retries: 2
+  
+  # 重试间隔(秒)
+  retry_after: 1
+  
+  # 回退策略
+  fallback_strategy:
+    - model: kimi-k2.5
+      fallback: [kimi-k2-turbo-preview, moonshot-v1-8k]
+    - model: kimi-k2-turbo-preview
+      fallback: [moonshot-v1-8k]
+
+# ============================================
+# Level 2 专用配置
+# ============================================
+
+level2_settings:
+  # 双探针一致性阈值
+  consistency_threshold: 0.8
+  
+  # 最大解析失败次数（超过则触发回退）
+  max_parse_failures: 3
+  
+  # 强制 JSON 输出
+  force_json: true
+  
+  # CI 校准参数
+  calibration:
+    # LLM 置信度到架构置信度的映射
+    confidence_scale: 1.0
+    # 与 Level 1 冲突时的惩罚系数
+    conflict_penalty: 0.6
+
+# ============================================
+# 场景化模型选择
+# ============================================
+
+routing_strategy:
+  # 标准 CI 评估（结构化输出）
+  ci_evaluation:
+    model: kimi-k2-turbo-preview
+    temperature: 0.3
+    max_tokens: 1500
+    
+  # 复杂推理（多步分析）
+  complex_reasoning:
+    model: kimi-k2.5
+    temperature: 0.5
+    max_tokens: 3000
+    
+  # 快速验证（双探针）
+  quick_probe:
+    model: kimi-k2-turbo-preview
+    temperature: 0.2
+    max_tokens: 800
+
+# ============================================
+# 成本控制和限速
+# ============================================
+
+cost_control:
+  # 每日最大请求数 (0 = 无限制)
+  max_requests_per_day: 0
+  
+  # 每分钟最大请求数
+  max_requests_per_minute: 120
+  
+  # 预算警告阈值 (美元)
+  budget_alert_threshold: 100.0
+  
+  # Level 2 调用占比警告 (>10% 总查询量)
+  level2_ratio_warning: 0.10
+
+# ============================================
+# 日志和监控
+# ============================================
+
+logging:
+  # 日志级别: DEBUG, INFO, WARNING, ERROR
+  level: INFO
+  
+  # 是否记录完整请求/响应
+  log_raw_requests: false
+  
+  # 回调地址 (用于监控)
+  callback_url: null
+  
+  # 记录指标: latency, cost, token_usage
+  track_metrics: true

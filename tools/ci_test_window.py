@@ -30,6 +30,15 @@ except ImportError:
 # Import CI architecture
 from ci_architecture.level0 import Level0Router, extract_features
 from ci_architecture.level1 import Level1Router
+from ci_architecture.level2 import Level2Router, PromptBuilder, build_level2_context
+
+# Import V2 Orchestrator
+try:
+    from ci_architecture.orchestrator import SmartOrchestratorV2, OrchestratorGuide
+    ORCHESTRATOR_V2_AVAILABLE = True
+except ImportError:
+    ORCHESTRATOR_V2_AVAILABLE = False
+    print("Warning: SmartOrchestratorV2 not available")
 
 
 class CIRouterTestWindow:
@@ -44,14 +53,16 @@ class CIRouterTestWindow:
         # Initialize routers
         self.router = None
         self.level1_router = None
+        self.level2_router = None
         self.documents = None
+        self.orchestrator_v2 = None
         self.init_routers()
         
         # Build UI
         self.build_ui()
         
     def init_routers(self):
-        """Initialize Level 0 and Level 1 routers"""
+        """Initialize Level 0, Level 1 and Level 2 routers"""
         # Level 0
         try:
             self.router = Level0Router()
@@ -67,6 +78,31 @@ class CIRouterTestWindow:
         except Exception as e:
             self.level1_status = f"未就绪: {e}"
             self.documents = None
+        
+        # Level 2 - check availability
+        try:
+            import os
+            api_key = os.environ.get("CI_LLM_API_KEY")
+            if api_key:
+                self.level2_status = "就绪 (API Key 已配置)"
+            else:
+                self.level2_status = "未就绪: 未配置 API Key"
+        except Exception as e:
+            self.level2_status = f"未就绪: {e}"
+        
+        # V2 Orchestrator
+        if ORCHESTRATOR_V2_AVAILABLE:
+            try:
+                self.orchestrator_v2 = SmartOrchestratorV2(
+                    l0_router=self.router,
+                    l1_router=None,  # Will be set when needed
+                    l2_router=None   # Will be set when needed
+                )
+                self.orchestrator_v2_status = "就绪"
+            except Exception as e:
+                self.orchestrator_v2_status = f"未就绪: {e}"
+        else:
+            self.orchestrator_v2_status = "不可用"
             
     def build_ui(self):
         """Build the user interface"""
@@ -97,9 +133,15 @@ class CIRouterTestWindow:
                                              font=('Arial', 10))
         self.level1_status_label.grid(row=0, column=3, sticky=tk.W, padx=(5, 20))
         
+        # Level 2 Status
+        ttk.Label(header_frame, text="Level 2:").grid(row=0, column=4, sticky=tk.W)
+        self.level2_status_label = ttk.Label(header_frame, text=self.level2_status,
+                                             font=('Arial', 10))
+        self.level2_status_label.grid(row=0, column=5, sticky=tk.W, padx=(5, 20))
+        
         # Reload button
         ttk.Button(header_frame, text="重新加载模型", 
-                  command=self.reload_routers).grid(row=0, column=4, padx=(10, 0))
+                  command=self.reload_routers).grid(row=0, column=6, padx=(10, 0))
         
         # ===== Mode Selection Section =====
         mode_frame = ttk.LabelFrame(main_frame, text="执行模式", padding="5")
@@ -108,6 +150,7 @@ class CIRouterTestWindow:
         # Mode selection variables
         self.use_level0_var = tk.BooleanVar(value=True)
         self.use_level1_var = tk.BooleanVar(value=False)
+        self.use_level2_var = tk.BooleanVar(value=False)
         
         # Checkboxes for mode selection
         ttk.Checkbutton(mode_frame, text="启用 Level 0 (路由)", 
@@ -116,11 +159,20 @@ class CIRouterTestWindow:
         ttk.Checkbutton(mode_frame, text="启用 Level 1 (检索)", 
                        variable=self.use_level1_var,
                        command=self.on_mode_change).pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Checkbutton(mode_frame, text="启用 Level 2 (LLM)", 
+                       variable=self.use_level2_var,
+                       command=self.on_mode_change).pack(side=tk.LEFT, padx=(0, 20))
         
         # Mode description label
         self.mode_desc_label = ttk.Label(mode_frame, text="当前: 仅 Level 0 路由", 
                                         foreground="blue", font=('Arial', 9, 'italic'))
         self.mode_desc_label.pack(side=tk.LEFT, padx=(20, 0))
+        
+        # V2 Orchestrator checkbox
+        self.use_v2_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(mode_frame, text="使用 V2 协调器 (带 Guide)", 
+                       variable=self.use_v2_var,
+                       command=self.on_mode_change).pack(side=tk.RIGHT, padx=(20, 10))
         
         # ===== Input Section =====
         input_frame = ttk.LabelFrame(main_frame, text="查询输入", padding="5")
@@ -175,7 +227,17 @@ class CIRouterTestWindow:
         self.notebook.add(self.json_frame, text="原始数据")
         self.build_json_tab()
         
-        # Tab 5: History
+        # Tab 5: Level 2 Results
+        self.level2_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.level2_frame, text="LLM 仲裁 (L2)")
+        self.build_level2_tab()
+        
+        # Tab 6: Orchestrator V2
+        self.orchestrator_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.orchestrator_frame, text="协调器 (V2)")
+        self.build_orchestrator_tab()
+        
+        # Tab 7: History
         self.history_frame = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(self.history_frame, text="历史记录")
         self.build_history_tab()
@@ -191,15 +253,28 @@ class CIRouterTestWindow:
         """Handle mode selection change"""
         use_l0 = self.use_level0_var.get()
         use_l1 = self.use_level1_var.get()
+        use_l2 = self.use_level2_var.get()
+        use_v2 = self.use_v2_var.get()
         
-        if use_l0 and not use_l1:
-            self.mode_desc_label.config(text="当前: 仅 Level 0 路由 (快速)")
-        elif use_l0 and use_l1:
-            self.mode_desc_label.config(text="当前: Level 0 + Level 1 混合检索 (完整)")
-        elif not use_l0 and use_l1:
-            self.mode_desc_label.config(text="当前: 仅 Level 1 检索 (需要文档)")
+        modes = []
+        if use_l0:
+            modes.append("L0")
+        if use_l1:
+            modes.append("L1")
+        if use_l2:
+            modes.append("L2")
+        
+        if use_v2:
+            self.mode_desc_label.config(text="当前: V2 协调器模式 (Guide-based)", foreground="purple")
+        elif not modes:
+            self.mode_desc_label.config(text="当前: 请至少选择一个模式", foreground="blue")
+        elif len(modes) == 1:
+            mode_names = {"L0": "仅 Level 0 路由 (快速)",
+                         "L1": "仅 Level 1 检索",
+                         "L2": "仅 Level 2 LLM"}
+            self.mode_desc_label.config(text=f"当前: {mode_names[modes[0]]}", foreground="blue")
         else:
-            self.mode_desc_label.config(text="当前: 请至少选择一个模式")
+            self.mode_desc_label.config(text=f"当前: {' + '.join(modes)} 完整流程", foreground="blue")
             
     def build_summary_tab(self):
         """Build the summary results tab"""
@@ -397,6 +472,48 @@ class CIRouterTestWindow:
         self.docs_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             
+    def build_level2_tab(self):
+        """Build the Level 2 LLM arbitration tab"""
+        # Create notebook for Level 2 sub-tabs
+        level2_notebook = ttk.Notebook(self.level2_frame)
+        level2_notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # Sub-tab 1: LLM Result
+        result_frame = ttk.Frame(level2_notebook, padding="10")
+        level2_notebook.add(result_frame, text="LLM 仲裁结果")
+        
+        self.level2_result_text = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD,
+                                                            font=('Consolas', 10))
+        self.level2_result_text.pack(fill=tk.BOTH, expand=True)
+        self.level2_result_text.insert("1.0", "启用 Level 2 后将显示 LLM 仲裁结果")
+        
+        # Sub-tab 2: LLM Reasoning
+        reasoning_frame = ttk.Frame(level2_notebook, padding="10")
+        level2_notebook.add(reasoning_frame, text="推理过程")
+        
+        self.level2_reasoning_text = scrolledtext.ScrolledText(reasoning_frame, wrap=tk.WORD,
+                                                               font=('Consolas', 10))
+        self.level2_reasoning_text.pack(fill=tk.BOTH, expand=True)
+        self.level2_reasoning_text.insert("1.0", "启用 Level 2 后将显示 LLM 推理过程")
+        
+        # Sub-tab 3: Prompt Construction
+        prompt_frame = ttk.Frame(level2_notebook, padding="10")
+        level2_notebook.add(prompt_frame, text="提示词构建")
+        
+        self.level2_prompt_text = scrolledtext.ScrolledText(prompt_frame, wrap=tk.WORD,
+                                                            font=('Consolas', 9))
+        self.level2_prompt_text.pack(fill=tk.BOTH, expand=True)
+        self.level2_prompt_text.insert("1.0", "启用 Level 2 后将显示构建的提示词和调用参数")
+        
+        # Sub-tab 4: Metrics
+        metrics_frame = ttk.Frame(level2_notebook, padding="10")
+        level2_notebook.add(metrics_frame, text="成本与延迟")
+        
+        self.level2_metrics_text = scrolledtext.ScrolledText(metrics_frame, wrap=tk.WORD,
+                                                             font=('Consolas', 10))
+        self.level2_metrics_text.pack(fill=tk.BOTH, expand=True)
+        self.level2_metrics_text.insert("1.0", "启用 Level 2 后将显示成本和延迟指标")
+        
     def build_json_tab(self):
         """Build the raw JSON tab"""
         self.json_text = scrolledtext.ScrolledText(self.json_frame, wrap=tk.WORD, font=('Consolas', 10))
@@ -446,10 +563,16 @@ class CIRouterTestWindow:
             messagebox.showwarning("输入为空", "请输入查询语句")
             return
         
+        # Check if V2 orchestrator is enabled
+        if self.use_v2_var.get():
+            self.execute_orchestrator_v2()
+            return
+        
         use_l0 = self.use_level0_var.get()
         use_l1 = self.use_level1_var.get()
+        use_l2 = self.use_level2_var.get()
         
-        if not use_l0 and not use_l1:
+        if not use_l0 and not use_l1 and not use_l2:
             messagebox.showwarning("模式错误", "请至少选择一种执行模式")
             return
             
@@ -461,25 +584,42 @@ class CIRouterTestWindow:
             start_time = time.time()
             
             result = {}
+            l0_result = None
+            l1_result = None
+            l2_result = None
             
+            # Level 0
             if use_l0:
-                # Execute Level 0 routing
                 l0_result = self.router.route(query)
                 result['level0'] = l0_result
-                
-                if use_l1:
-                    # Execute Level 1 retrieval
+            
+            # Level 1
+            if use_l1:
+                if l0_result:
                     l1_result = self.execute_level1(query, l0_result)
-                    result['level1'] = l1_result
-                    # Use Level 1 results for display
-                    display_result = {**l0_result, **l1_result}
                 else:
-                    display_result = l0_result
-            else:
-                # Only Level 1 (rare case)
-                l1_result = self.execute_level1(query, {})
+                    l1_result = self.execute_level1(query, {})
                 result['level1'] = l1_result
-                display_result = l1_result
+            
+            # Level 2
+            if use_l2:
+                if not l0_result:
+                    l0_result = self.router.route(query) if self.router else {'C': 0, 'I': 0, 'sigma_joint': 0}
+                if not l1_result:
+                    l1_result = self.execute_level1(query, l0_result) if self.documents else {'I_mean': 0.5, 'sigma_I': 0}
+                
+                l2_result = self.execute_level2(query, l0_result, l1_result)
+                result['level2'] = l2_result
+            
+            # Determine display result (use highest level)
+            if l2_result:
+                display_result = {**l0_result, **l1_result, **l2_result}
+            elif l1_result:
+                display_result = {**l0_result, **l1_result}
+            elif l0_result:
+                display_result = l0_result
+            else:
+                display_result = {}
             
             elapsed = (time.time() - start_time) * 1000  # ms
             
@@ -503,6 +643,61 @@ class CIRouterTestWindow:
         l1_result = self.level1_router.verify(query, level0_result)
         
         return l1_result
+    
+    def execute_level2(self, query: str, level0_result: dict, level1_result: dict) -> dict:
+        """Execute Level 2 LLM arbitration"""
+        # Initialize Level 2 router if not already done
+        if self.level2_router is None:
+            self.level2_router = Level2Router(use_dual_probe=False)  # 单探针模式更快
+        
+        # Build prompt construction info for display
+        prompt_builder = PromptBuilder()
+        context = build_level2_context(query, level0_result, level1_result)
+        system_prompt = prompt_builder.get_system_prompt("ci_evaluation")
+        user_prompt = prompt_builder.build_ci_evaluation_prompt(context)
+        
+        # Execute arbitration
+        l2_result = self.level2_router.arbitrate(query, level0_result, level1_result)
+        
+        # Convert to dict for JSON serialization
+        return {
+            'C': l2_result.C,
+            'I': l2_result.I,
+            'C_continuous': l2_result.C_continuous,
+            'I_continuous': l2_result.I_continuous,
+            'confidence': l2_result.confidence,
+            'sigma_c': l2_result.sigma_c,
+            'sigma_i': l2_result.sigma_i,
+            'sigma_joint': l2_result.sigma_joint,
+            'escalate': l2_result.escalate,
+            'escalate_reason': l2_result.escalate_reason,
+            'mode': l2_result.mode,
+            'reasoning': l2_result.reasoning,
+            'probe_consistency': l2_result.probe_consistency,
+            'conflict_with_l1': l2_result.conflict_with_l1,
+            'latency_ms': l2_result.latency_ms,
+            'cost_usd': l2_result.cost_usd,
+            'model_used': l2_result.model_used,
+            'parse_failures': l2_result.parse_failures,
+            # Additional debug info for GUI
+            '_debug': {
+                'query': query,
+                'system_prompt': system_prompt,
+                'user_prompt': user_prompt,
+                'level0_input': level0_result,
+                'level1_input': level1_result,
+                'context_summary': {
+                    'level0_C': context.level0.C,
+                    'level0_I': context.level0.I,
+                    'level0_sigma_joint': context.level0.sigma_joint,
+                    'level0_mode': context.level0.mode,
+                    'level1_I_mean': context.level1.I_mean,
+                    'level1_sigma_I': context.level1.sigma_I,
+                    'level1_conflict': context.level1.conflict_detected,
+                    'doc_count': len(context.retrieval_evidence.get('top_documents', []))
+                }
+            }
+        }
             
     def update_results(self, query: str, result: dict, elapsed_ms: float, full_result: dict = None):
         """Update the UI with results"""
@@ -571,8 +766,12 @@ class CIRouterTestWindow:
         # Update decision
         escalate = result.get('escalate', False)
         if escalate:
-            self.decision_label.config(text="升级到 Level 2" if self.use_level1_var.get() else "升级到 Level 1", 
-                                      foreground="orange")
+            if self.use_level2_var.get():
+                self.decision_label.config(text="触发 Level 2 回退策略", foreground="red")
+            elif self.use_level1_var.get():
+                self.decision_label.config(text="升级到 Level 2", foreground="orange")
+            else:
+                self.decision_label.config(text="升级到 Level 1", foreground="orange")
         else:
             self.decision_label.config(text=f"直接路由到 Zone {zone}", foreground="green")
             
@@ -591,6 +790,10 @@ class CIRouterTestWindow:
         if 'level1' in full_result and full_result['level1']:
             self.update_retrieval_tab(full_result['level1'])
         
+        # Update Level 2 tab
+        if 'level2' in full_result and full_result['level2']:
+            self.update_level2_tab(full_result['level2'])
+        
         # Update JSON tab
         result_with_meta = {
             "query": query,
@@ -601,8 +804,14 @@ class CIRouterTestWindow:
         self.json_text.insert("1.0", json.dumps(result_with_meta, indent=2, ensure_ascii=False, default=str))
         
         # Add to history
-        mode_str = "L0+L1" if self.use_level0_var.get() and self.use_level1_var.get() else \
-                   ("L0" if self.use_level0_var.get() else "L1")
+        modes = []
+        if self.use_level0_var.get():
+            modes.append("L0")
+        if self.use_level1_var.get():
+            modes.append("L1")
+        if self.use_level2_var.get():
+            modes.append("L2")
+        mode_str = "+".join(modes) if modes else "None"
         self.add_to_history(query, zone, escalate, mode_str)
         
     def update_retrieval_tab(self, l1_result: dict):
@@ -679,6 +888,108 @@ sigma_joint: {l1_result.get('sigma_joint', 0):.3f}
                 doc.get('content', '')[:80] + '...' if len(doc.get('content', '')) > 80 else doc.get('content', '')
             ))
         
+    def update_level2_tab(self, l2_result: dict):
+        """Update Level 2 LLM arbitration tab"""
+        # LLM Result
+        result_text = f"""=== Level 2 LLM 仲裁结果 ===
+
+复杂度 (C): {l2_result.get('C', '-')} ({'高' if l2_result.get('C') == 1 else '低' if l2_result.get('C') == 0 else '未知'})
+信息充分性 (I): {l2_result.get('I', '-')} ({'充分' if l2_result.get('I') == 1 else '不足' if l2_result.get('I') == 0 else '未知'})
+
+置信度:
+  - Confidence: {l2_result.get('confidence', 0):.3f}
+  - Sigma C: {l2_result.get('sigma_c', 0):.3f}
+  - Sigma I: {l2_result.get('sigma_i', 0):.3f}
+  - Sigma Joint: {l2_result.get('sigma_joint', 0):.3f}
+
+执行模式: {l2_result.get('mode', 'Unknown')}
+是否升级: {'是' if l2_result.get('escalate') else '否'}
+升级原因: {l2_result.get('escalate_reason', 'N/A')}
+
+与 Level 1 冲突: {'是' if l2_result.get('conflict_with_l1') else '否'}
+探针一致性: {l2_result.get('probe_consistency', 0):.3f}
+解析失败次数: {l2_result.get('parse_failures', 0)}
+"""
+        self.level2_result_text.delete("1.0", tk.END)
+        self.level2_result_text.insert("1.0", result_text)
+        
+        # Reasoning
+        reasoning = l2_result.get('reasoning', '无推理过程')
+        self.level2_reasoning_text.delete("1.0", tk.END)
+        self.level2_reasoning_text.insert("1.0", reasoning)
+        
+        # Prompt Construction
+        debug_info = l2_result.get('_debug', {})
+        if debug_info:
+            system_prompt = debug_info.get('system_prompt', 'N/A')
+            user_prompt = debug_info.get('user_prompt', 'N/A')
+            context_summary = debug_info.get('context_summary', {})
+            level0_input = debug_info.get('level0_input', {})
+            level1_input = debug_info.get('level1_input', {})
+            
+            prompt_text = f"""=== Level 2 提示词构建详情 ===
+
+【调用方法】
+- 使用类: Level2Router.arbitrate()
+- 提示词构建: PromptBuilder.build_ci_evaluation_prompt()
+- 上下文构建: build_level2_context()
+
+【输入参数摘要】
+Level 0 输入:
+  - C (复杂度): {context_summary.get('level0_C', 'N/A')}
+  - I (信息充分性): {context_summary.get('level0_I', 'N/A')}
+  - Sigma Joint: {context_summary.get('level0_sigma_joint', 'N/A'):.3f}
+  - 模式: {context_summary.get('level0_mode', 'N/A')}
+
+Level 1 输入:
+  - I_mean: {context_summary.get('level1_I_mean', 'N/A'):.3f}
+  - Sigma I: {context_summary.get('level1_sigma_I', 'N/A'):.3f}
+  - 冲突检测: {'是' if context_summary.get('level1_conflict') else '否'}
+  - Top 文档数: {context_summary.get('doc_count', 0)}
+
+【System Prompt (系统提示词)】
+{'='*60}
+{system_prompt}
+{'='*60}
+
+【User Prompt (用户提示词)】
+{'='*60}
+{user_prompt}
+{'='*60}
+
+【原始 Level 0 结果】
+{json.dumps(level0_input, indent=2, ensure_ascii=False)}
+
+【原始 Level 1 结果】
+{json.dumps(level1_input, indent=2, ensure_ascii=False, default=str)}
+"""
+        else:
+            prompt_text = "无调试信息（可能 Level 2 未实际执行或执行失败）"
+        
+        self.level2_prompt_text.delete("1.0", tk.END)
+        self.level2_prompt_text.insert("1.0", prompt_text)
+        
+        # Metrics
+        metrics_text = f"""=== Level 2 性能指标 ===
+
+延迟与成本:
+  - LLM 延迟: {l2_result.get('latency_ms', 0):.2f} ms
+  - API 成本: ${l2_result.get('cost_usd', 0):.6f}
+  - 使用模型: {l2_result.get('model_used', 'Unknown')}
+
+总计指标:
+"""
+        if self.level2_router:
+            metrics = self.level2_router.get_metrics()
+            metrics_text += f"""  - 总请求数: {metrics.get('total_requests', 0)}
+  - 总升级数: {metrics.get('total_escapes', 0)}
+  - 升级率: {metrics.get('escape_rate', 0):.2%}
+  - 总成本: ${metrics.get('total_cost_usd', 0):.6f}
+  - 平均延迟: {metrics.get('avg_latency_ms', 0):.2f} ms
+"""
+        self.level2_metrics_text.delete("1.0", tk.END)
+        self.level2_metrics_text.insert("1.0", metrics_text)
+        
     def get_zone_color(self, zone: str) -> str:
         """Get color for zone"""
         colors = {
@@ -732,6 +1043,10 @@ sigma_joint: {l1_result.get('sigma_joint', 0):.3f}
             "胸口压榨性疼痛，劳动后发作，休息缓解",
             "ST段抬高 心肌酶升高 胸痛",
             "半边身子动不了，说话不清楚",
+            # Complex examples for Level 2
+            "--- 复杂查询 (Level 2) ---",
+            "设计一个支持百万并发的电商系统，考虑数据库选型、缓存策略、消息队列和容灾方案",
+            "分析2024年全球 pharmaceutical 行业的监管趋势及其对中国创新药企业出海战略的影响",
         ]
         
         # Create popup menu
@@ -761,15 +1076,247 @@ sigma_joint: {l1_result.get('sigma_joint', 0):.3f}
         self.status_bar.config(text="重新加载模型...")
         self.root.update()
         
-        # Reset Level 1 router
+        # Reset routers
         self.level1_router = None
+        self.level2_router = None
         
         self.init_routers()
         self.status_label.config(text=self.router_status)
         self.level1_status_label.config(text=self.level1_status)
+        self.level2_status_label.config(text=self.level2_status)
         
-        messagebox.showinfo("重新加载", f"Level 0: {self.router_status}\nLevel 1: {self.level1_status}")
+        messagebox.showinfo("重新加载", f"Level 0: {self.router_status}\nLevel 1: {self.level1_status}\nLevel 2: {self.level2_status}")
         self.status_bar.config(text="就绪")
+    
+    # ==================== V2 Orchestrator Methods ====================
+    
+    def build_orchestrator_tab(self):
+        """Build the Orchestrator V2 tab"""
+        # Status frame
+        status_frame = ttk.LabelFrame(self.orchestrator_frame, text="V2 协调器状态", padding="10")
+        status_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(status_frame, text=f"状态: {getattr(self, 'orchestrator_v2_status', '未初始化')}",
+                 font=('Arial', 10)).pack(anchor=tk.W)
+        ttk.Label(status_frame, text="特性: Zone B/D 必须携带 orchestrator_guide | 支持多策略 [clarify, decompose] | 最大 2 轮转区",
+                 font=('Arial', 9), foreground="gray").pack(anchor=tk.W, pady=(5, 0))
+        
+        # Execute button
+        btn_frame = ttk.Frame(self.orchestrator_frame)
+        btn_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Button(btn_frame, text="执行 V2 协调器",
+                  command=self.execute_orchestrator_v2).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(btn_frame, text="模拟多轮交互",
+                  command=self.simulate_v2_session).pack(side=tk.LEFT)
+        
+        # Result display
+        result_frame = ttk.LabelFrame(self.orchestrator_frame, text="协调器输出", padding="10")
+        result_frame.pack(fill=tk.BOTH, expand=True)
+        
+        self.orchestrator_text = scrolledtext.ScrolledText(result_frame, wrap=tk.WORD,
+                                                          font=('Consolas', 10))
+        self.orchestrator_text.pack(fill=tk.BOTH, expand=True)
+        self.orchestrator_text.insert("1.0", "启用 V2 协调器后，此处将显示:\n\n"
+                                     "1. 初始 Zone 判定\n"
+                                     "2. orchestrator_guide (Level 2 生成)\n"
+                                     "3. 推荐策略 [clarify/decompose]\n"
+                                     "4. 转区计划和执行结果")
+    
+    def execute_orchestrator_v2(self):
+        """Execute V2 orchestrator"""
+        if not ORCHESTRATOR_V2_AVAILABLE:
+            messagebox.showerror("错误", "SmartOrchestratorV2 不可用")
+            return
+        
+        if not self.orchestrator_v2:
+            messagebox.showerror("错误", "V2 协调器未初始化")
+            return
+        
+        query = self.query_text.get("1.0", tk.END).strip()
+        if not query:
+            messagebox.showwarning("输入为空", "请输入查询语句")
+            return
+        
+        self.status_bar.config(text="执行 V2 协调器...")
+        self.root.update()
+        
+        try:
+            start_time = time.time()
+            
+            # Initialize L1 router if needed
+            if self.level1_router is None and self.documents:
+                self.level1_router = Level1Router(documents=self.documents)
+            
+            # Initialize L2 router if needed
+            if self.level2_router is None:
+                self.level2_router = Level2Router(use_dual_probe=False)
+            
+            # Update orchestrator with current routers
+            self.orchestrator_v2.l1_router = self.level1_router
+            self.orchestrator_v2.l2_router = self.level2_router
+            
+            # Execute V2 orchestrator
+            result = self.orchestrator_v2.process(query, session_id=f"gui_{int(start_time)}")
+            
+            elapsed = (time.time() - start_time) * 1000
+            
+            # Display result
+            self.update_orchestrator_tab(result, elapsed)
+            
+            self.status_bar.config(text=f"V2 协调器完成 ({elapsed:.2f}ms)")
+            
+        except Exception as e:
+            import traceback
+            messagebox.showerror("错误", f"V2 协调器执行失败:\n{str(e)}\n\n{traceback.format_exc()}")
+            self.status_bar.config(text=f"错误: {e}")
+    
+    def update_orchestrator_tab(self, result: dict, elapsed_ms: float):
+        """Update orchestrator tab with result"""
+        status = result.get('status', 'unknown')
+        
+        # Safely format sigma_joint
+        sigma_joint = result.get('ci', {}).get('sigma_joint', '-')
+        if isinstance(sigma_joint, (int, float)):
+            sigma_joint_str = f"{sigma_joint:.3f}"
+        else:
+            sigma_joint_str = str(sigma_joint)
+        
+        text = f"""=== V2 协调器执行结果 ===
+
+状态: {status}
+执行时间: {elapsed_ms:.2f} ms
+转区轮次: {result.get('transition_round', 0)} / {result.get('max_rounds', 2)}
+
+=== CI 评估 ===
+Zone: {result.get('zone', '-')} {'(最优区)' if result.get('zone') in ['A', 'C'] else '(需转区)'}
+C (复杂度): {result.get('ci', {}).get('C', '-')}
+I (信息充分): {result.get('ci', {}).get('I', '-')}
+sigma_joint: {sigma_joint_str}
+
+"""
+        
+        if status == 'transition_required':
+            text += f"""=== 转区计划 ===
+当前区域: {result.get('current_zone', '-')}
+目标区域: {result.get('target_zone', '-')}
+主策略: {result.get('primary_strategy', '-')}
+可用策略: {', '.join(result.get('available_strategies', []))}
+用户可选择: {'是' if result.get('user_selectable') else '否'}
+
+"""
+            if 'clarification' in result:
+                clarification = result['clarification']
+                text += f"""=== 信息补充 (Clarify) ===
+缺失信息:
+"""
+                for info in clarification.get('missing_info', []):
+                    text += f"  - {info}\n"
+                text += f"\n提示模板:\n{clarification.get('prompt', '')}\n"
+            
+            if 'decomposition' in result:
+                decomposition = result['decomposition']
+                text += f"""\n=== 问题分解 (Decompose) ===
+子问题数量: {len(decomposition.get('sub_problems', []))}
+聚合目标: Zone {decomposition.get('aggregation_target', '-')}
+
+子问题列表:
+"""
+                for sp in decomposition.get('sub_problems', []):
+                    text += f"  [{sp.get('id')}] {sp.get('query')}\n"
+        
+        elif status == 'success':
+            text += f"""=== 执行配置 ===
+已到达最优区，可直接执行:
+
+"""
+            config = result.get('execution_config', {})
+            text += f"  描述: {config.get('description', '-')}\n"
+            text += f"  Max Tokens: {config.get('max_tokens', '-')}\n"
+            text += f"  Temperature: {config.get('temperature', '-')}\n"
+            text += f"  Retrieval Streams: {config.get('retrieval_streams', '-')}\n"
+            text += f"  Verification: {'是' if config.get('verification') else '否'}\n"
+        
+        elif status == 'fallback':
+            text += f"""=== 回退执行 ===
+原因: {result.get('reason', '未知')}
+使用保守策略在 Zone B 执行
+"""
+        
+        self.orchestrator_text.delete("1.0", tk.END)
+        self.orchestrator_text.insert("1.0", text)
+    
+    def simulate_v2_session(self):
+        """Simulate a multi-round V2 session"""
+        if not ORCHESTRATOR_V2_AVAILABLE or not self.orchestrator_v2:
+            messagebox.showerror("错误", "V2 协调器不可用")
+            return
+        
+        query = self.query_text.get("1.0", tk.END).strip()
+        if not query:
+            query = "How to use this medicine?"
+        
+        # Initialize L1/L2 routers if needed
+        if self.level1_router is None and self.documents:
+            self.level1_router = Level1Router(documents=self.documents)
+        
+        if self.level2_router is None:
+            self.level2_router = Level2Router(use_dual_probe=False)
+        
+        # Update orchestrator with routers
+        self.orchestrator_v2.l1_router = self.level1_router
+        self.orchestrator_v2.l2_router = self.level2_router
+        
+        # Create a simulation
+        session_id = f"sim_{int(time.time())}"
+        
+        text = f"""=== V2 协调器多轮会话模拟 ===
+会话 ID: {session_id}
+原始查询: {query}
+
+"""
+        
+        # Round 1: Initial query
+        text += "【第 1 轮】初始查询\n"
+        text += f"  用户: {query}\n"
+        
+        try:
+            result = self.orchestrator_v2.process(query, session_id=session_id)
+            text += f"  状态: {result.get('status')}\n"
+            text += f"  Zone: {result.get('zone', result.get('current_zone', '-'))}\n"
+            
+            status = result.get('status')
+            if status == 'transition_required':
+                text += f"  需要: {result.get('primary_strategy')}\n"
+                if 'clarification' in result:
+                    missing = result['clarification'].get('missing_info', [])
+                    text += f"  缺失信息: {', '.join(missing)}\n"
+                
+                # Simulate user providing info
+                text += "\n【第 2 轮】用户提供信息\n"
+                text += "  用户: 提供了部分信息\n"
+                
+                result2 = self.orchestrator_v2.continue_with_info(session_id, {
+                    'medicine': 'Amoxicillin',
+                    'age': '35'
+                })
+                
+                text += f"  状态: {result2.get('status')}\n"
+                text += f"  Zone: {result2.get('zone', result2.get('current_zone', '-'))}\n"
+                
+                if result2.get('status') == 'success':
+                    text += "  ✓ 到达最优区，可以执行\n"
+            elif status == 'success':
+                text += "  ✓ 直接到达最优区\n"
+            elif status == 'fallback':
+                text += f"  ⚠ 回退执行: {result.get('reason', '未知原因')}\n"
+            else:
+                text += f"  ? 未知状态: {status}\n"
+                
+        except Exception as e:
+            text += f"  错误: {e}\n"
+        
+        self.orchestrator_text.delete("1.0", tk.END)
+        self.orchestrator_text.insert("1.0", text)
         
     def run(self):
         """Run the application"""

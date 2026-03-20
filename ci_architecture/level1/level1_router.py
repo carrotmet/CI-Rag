@@ -44,8 +44,20 @@ class Level1Router:
         self.structured_retriever: Optional[StructuredRetriever] = None
         self.fusion = ConfidenceFusion()
         
+        # V2: Optional Level 2 router for guide generation
+        self._light_l2_router = None
+        
         # Initialize retrievers
         self._init_retrievers(vector_index_path, keyword_index_path, documents)
+    
+    def set_light_l2_router(self, l2_router):
+        """
+        V2: Inject Level 2 router for guide generation.
+        
+        Args:
+            l2_router: Level2Router instance with generate_orchestrator_guide method
+        """
+        self._light_l2_router = l2_router
     
     def _init_retrievers(self, vector_path, keyword_path, documents):
         """Initialize retrieval components."""
@@ -252,6 +264,60 @@ class Level1Router:
             stats['keyword'] = self.keyword_retriever.get_stats()
         
         return stats
+    
+    # ==================== V2: verify_with_guide ====================
+    
+    def verify_with_guide(self, query: str, level0_result: Dict, k: int = 10) -> Dict:
+        """
+        V2: Verify with orchestrator guide generation for Zone B/D.
+        
+        This method extends verify() by:
+        1. Performing normal Level 1 verification
+        2. Determining final zone based on fused results
+        3. If final zone is B or D, generating orchestrator_guide via light L2
+        
+        Args:
+            query: Query string
+            level0_result: Result from Level 0
+            k: Number of retrieval results
+            
+        Returns:
+            Verified result with orchestrator_guide if Zone B/D
+        """
+        # 1. Normal Level 1 verification
+        result = self.verify(query, level0_result, k)
+        
+        # 2. Determine final zone
+        # Use fused I_mean to determine information sufficiency
+        I_fused = result.get('I_mean', 0.5)
+        I_discrete = 1 if I_fused >= 0.5 else 0
+        
+        # C is typically from Level 0 (unless significant conflict)
+        C_discrete = level0_result.get('C', 0)
+        
+        # Map to zone
+        zone_map = {(0, 0): 'D', (0, 1): 'C', (1, 0): 'B', (1, 1): 'A'}
+        final_zone = zone_map.get((C_discrete, I_discrete), 'B')
+        
+        result['final_zone'] = final_zone
+        result['C'] = C_discrete
+        result['I'] = I_discrete
+        
+        # 3. Zone B/D: Generate orchestrator_guide if L2 available
+        if final_zone in ['B', 'D'] and self._light_l2_router is not None:
+            try:
+                guide = self._light_l2_router.generate_orchestrator_guide(
+                    query=query,
+                    current_zone=final_zone,
+                    level0_result=level0_result,
+                    level1_result=result
+                )
+                result['orchestrator_guide'] = guide
+            except Exception as e:
+                # Guide generation failed - continue without guide
+                result['orchestrator_guide_error'] = str(e)
+        
+        return result
 
 
 # Convenience function

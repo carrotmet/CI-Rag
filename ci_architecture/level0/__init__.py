@@ -5,12 +5,26 @@ from .heuristic_router import HeuristicRouter
 from .classifier import XGBoostClassifier
 from .router import Level0Router, RouterStatus, route_query
 
-__all__ = [
-    "FeatureExtractor",
-    "extract_features",
-    "HeuristicRouter",
-    "XGBoostClassifier",
-    "Level0Router",
-    "RouterStatus",
-    "route_query",
-]
+# Optional: cntext-enhanced feature extractor
+try:
+    from .features_cntext import CntextFeatureExtractor
+    __all__ = [
+        "FeatureExtractor",
+        "extract_features",
+        "HeuristicRouter",
+        "XGBoostClassifier",
+        "Level0Router",
+        "RouterStatus",
+        "route_query",
+        "CntextFeatureExtractor",
+    ]
+except ImportError:
+    __all__ = [
+        "FeatureExtractor",
+        "extract_features",
+        "HeuristicRouter",
+        "XGBoostClassifier",
+        "Level0Router",
+        "RouterStatus",
+        "route_query",
+    ]

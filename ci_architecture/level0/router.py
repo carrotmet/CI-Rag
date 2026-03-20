@@ -56,8 +56,20 @@ class Level0Router:
         self.heuristic = HeuristicRouter()
         self.xgb: Optional[XGBoostClassifier] = None
         
+        # V2: Optional Level 2 router for guide generation (avoid circular import)
+        self._light_l2_router = None
+        
         # Detect model state and initialize accordingly
         self._detect_and_initialize()
+    
+    def set_light_l2_router(self, l2_router):
+        """
+        V2: Inject Level 2 router for guide generation.
+        
+        Args:
+            l2_router: Level2Router instance with generate_orchestrator_guide method
+        """
+        self._light_l2_router = l2_router
     
     def _detect_and_initialize(self) -> None:
         """Detect model state and initialize XGBoost if available."""
@@ -229,6 +241,47 @@ class Level0Router:
         """
         zone_map = {(0, 0): 'D', (0, 1): 'C', (1, 0): 'B', (1, 1): 'A'}
         return zone_map.get((C, I), 'B')  # Default to B (conservative)
+    
+    # ==================== V2: route_with_guide ====================
+    
+    def route_with_guide(self, query: str, user_history: Optional[Dict] = None) -> Dict:
+        """
+        V2: Route with orchestrator guide generation for Zone B/D.
+        
+        This method extends route() by:
+        1. Performing normal Level 0 routing
+        2. If result is Zone B or D, generating orchestrator_guide via light L2
+        
+        Args:
+            query: Input query string
+            user_history: Optional user historical data
+            
+        Returns:
+            Routing decision with orchestrator_guide if Zone B/D
+        """
+        # 1. Normal Level 0 routing
+        result = self.route(query, user_history)
+        
+        # 2. Check zone
+        zone = self.get_zone(result['C'], result['I'])
+        result['zone'] = zone
+        
+        # 3. Zone B/D: Generate orchestrator_guide if L2 available
+        if zone in ['B', 'D'] and self._light_l2_router is not None:
+            try:
+                guide = self._light_l2_router.generate_orchestrator_guide(
+                    query=query,
+                    current_zone=zone,
+                    level0_result=result,
+                    level1_result={}  # L0 stage has no L1 result yet
+                )
+                result['orchestrator_guide'] = guide
+                result['mode'] = result.get('mode', '') + '_WITH_GUIDE'
+            except Exception as e:
+                # Guide generation failed - continue without guide
+                result['orchestrator_guide_error'] = str(e)
+        
+        return result
 
 
 # Convenience function for direct usage
