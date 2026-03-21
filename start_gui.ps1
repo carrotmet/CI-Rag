@@ -34,4 +34,4 @@ if ($env:CI_LLM_API_KEY) {
 
 # 启动 GUI
 Write-Host "启动 CI-RAG-ROUTER GUI..." -ForegroundColor Cyan
-.venv\Scripts\python tools/ci_test_window.py
+.venv\Scripts\python tools/ci_test_window_v4.py
